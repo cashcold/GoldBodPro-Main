@@ -173,14 +173,15 @@ class InvestmentsTab extends Component {
                 const tomorrow = new Date(now);
                 tomorrow.setDate(tomorrow.getDate() + 1);
                 const isTomorrow = endDate.toDateString() === tomorrow.toDateString();
+                const isMatured = Date.now() >= endMs;
 
                 let relativeDay = dateStr;
-                if (isToday) relativeDay = 'Today';
+                if (isMatured) relativeDay = 'Matured / Ready to Cashout';
+                else if (isToday) relativeDay = 'Today';
                 else if (isTomorrow) relativeDay = 'Tomorrow';
 
                 const fullMaturity = `${dateStr} at ${timeStr}`;
-                const relativeMaturity = `${relativeDay} by ${timeStr}`;
-                const isMatured = Date.now() >= endMs;
+                const relativeMaturity = isMatured ? 'Ready Now' : `${relativeDay} by ${timeStr}`;
                 const isClaiming = claimingId === inv.id;
 
                 return (

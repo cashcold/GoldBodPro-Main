@@ -736,35 +736,123 @@ async function settleMaturedInvestments(userId: string) {
   const now = Date.now();
   const settledContracts: any[] = [];
 
+  // 1. Check and settle directly in MongoDB if connected
+  if (mongoose.connection.readyState === 1) {
+    try {
+      const userQuery = mongoose.Types.ObjectId.isValid(userId)
+        ? { $or: [{ userId }, { userId: new mongoose.Types.ObjectId(userId) }] }
+        : { userId };
+      
+      const dbInvs: any[] = await (investmentGoldBodPro as any).find(userQuery);
+      
+      for (const dInv of dbInvs) {
+        if (dInv.status === 'active') {
+          const startMs = dInv.startDate ? new Date(dInv.startDate).getTime() : now;
+          const durDays = Number(dInv.durationDays) || 1;
+          const endMs = dInv.endDate ? new Date(dInv.endDate).getTime() : (startMs + durDays * 24 * 3600 * 1000);
+          
+          if (now >= endMs) {
+            const principal = Number(dInv.amount) || 0;
+            const profitRate = Number(dInv.profitPercent) || 5;
+            const profit = Number(dInv.dailyROI ? (Number(dInv.dailyROI) * durDays) : (principal * (profitRate / 100)));
+            const totalReturn = Number(dInv.totalReturn) || (principal + profit);
+
+            // Update in MongoDB
+            await (investmentGoldBodPro as any).findByIdAndUpdate(dInv._id, {
+              status: 'completed',
+              completedAt: new Date(),
+              totalEarned: totalReturn,
+              endDate: new Date(endMs)
+            }).catch(() => {});
+
+            // Update user in MongoDB
+            await (userGoldBodPro as any).findByIdAndUpdate(userId, {
+              $inc: { balance: totalReturn, totalProfit: profit, todaysProfit: profit },
+              $set: { activeInvestment: 0 }
+            }).catch(() => {});
+
+            // Record transaction in MongoDB
+            const desc = `Contract Matured: ${dInv.planName} ($${principal.toFixed(2)} principal + $${profit.toFixed(2)} profit) credited to Available Balance`;
+            await (transactionGoldBodPro as any).create({
+              userId,
+              type: 'mining_payout',
+              amount: totalReturn,
+              description: desc,
+              status: 'completed',
+              createdAt: new Date()
+            }).catch(() => {});
+
+            // Sync in memory user and investment
+            user.balance += totalReturn;
+            user.totalProfit += profit;
+            user.todaysProfit += profit;
+
+            const memInv = MEMORY_DB.activeInvestments.find(i => i.id === dInv._id.toString());
+            if (memInv) {
+              memInv.status = 'completed';
+              memInv.startDate = new Date(startMs).toISOString();
+              memInv.endDate = new Date(endMs).toISOString();
+              (memInv as any).completedAt = new Date().toISOString();
+            } else {
+              MEMORY_DB.activeInvestments.unshift({
+                id: dInv._id.toString(),
+                userId: user.id,
+                planName: dInv.planName,
+                amount: principal,
+                profitPercent: profitRate,
+                durationDays: durDays,
+                dailyReturn: Number(dInv.dailyROI) || (profit / durDays),
+                totalReturn,
+                startDate: new Date(startMs).toISOString(),
+                endDate: new Date(endMs).toISOString(),
+                status: 'completed'
+              });
+            }
+
+            const payoutTx = {
+              id: 'tx_payout_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
+              userId: user.id,
+              type: 'Plan Capital & Profit Payout',
+              amount: totalReturn,
+              currency: 'USDT',
+              description: desc,
+              status: 'Completed',
+              createdAt: new Date().toISOString()
+            };
+            MEMORY_DB.transactions.unshift(payoutTx);
+            settledContracts.push(dInv);
+          }
+        }
+      }
+    } catch (dbErr) {
+      console.error('Error settling MongoDB investments:', dbErr);
+    }
+  }
+
+  // 2. Settle in MEMORY_DB
   for (const inv of MEMORY_DB.activeInvestments) {
     if (inv.userId === userId && inv.status === 'active') {
       const startMs = inv.startDate ? new Date(inv.startDate).getTime() : now;
       const durDays = Number(inv.durationDays) || 1;
       const endMs = inv.endDate ? new Date(inv.endDate).getTime() : (startMs + durDays * 24 * 3600 * 1000);
 
-      // Lock fixed endDate permanently
-      if (!inv.endDate) {
-        inv.endDate = new Date(endMs).toISOString();
-      }
+      inv.startDate = new Date(startMs).toISOString();
+      inv.endDate = new Date(endMs).toISOString();
 
       if (now >= endMs) {
-        // Contract has matured! Settle and credit user
         inv.status = 'completed';
         (inv as any).completedAt = new Date().toISOString();
         (inv as any).payoutClaimed = true;
 
         const principal = Number(inv.amount) || 0;
-        const profitRate = Number(inv.profitPercent) || 0;
-        const profit = principal * (profitRate / 100);
+        const profitRate = Number(inv.profitPercent) || 5;
+        const profit = Number(inv.dailyReturn ? (Number(inv.dailyReturn) * durDays) : (principal * (profitRate / 100)));
         const totalReturn = Number(inv.totalReturn) || (principal + profit);
 
-        // Credit funds to user available balance
         user.balance += totalReturn;
-        user.activeInvestment = Math.max(0, user.activeInvestment - principal);
         user.totalProfit += profit;
         user.todaysProfit += profit;
 
-        // Record payout transaction
         const payoutTx = {
           id: 'tx_payout_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
           userId: user.id,
@@ -777,38 +865,14 @@ async function settleMaturedInvestments(userId: string) {
         };
         MEMORY_DB.transactions.unshift(payoutTx);
         settledContracts.push(inv);
-
-        // Update MongoDB if connected
-        if (mongoose.connection.readyState === 1) {
-          try {
-            await (investmentGoldBodPro as any).findByIdAndUpdate(inv.id, {
-              status: 'completed',
-              completedAt: new Date(),
-              totalEarned: totalReturn
-            }).catch(() => {});
-
-            await (userGoldBodPro as any).findByIdAndUpdate(user.id, {
-              balance: user.balance,
-              activeInvestment: user.activeInvestment,
-              totalProfit: user.totalProfit,
-              todaysProfit: user.todaysProfit
-            }).catch(() => {});
-
-            await (transactionGoldBodPro as any).create({
-              userId: user.id,
-              type: 'mining_payout',
-              amount: totalReturn,
-              description: payoutTx.description,
-              status: 'completed',
-              createdAt: new Date()
-            }).catch(() => {});
-          } catch (dbErr) {
-            console.error('Error persisting settled investment in MongoDB:', dbErr);
-          }
-        }
       }
     }
   }
+
+  // Recalculate user active investment based on active contracts
+  user.activeInvestment = MEMORY_DB.activeInvestments
+    .filter(i => i.userId === userId && i.status === 'active')
+    .reduce((sum, i) => sum + (Number(i.amount) || 0), 0);
 
   return settledContracts;
 }
@@ -826,7 +890,7 @@ router.get('/user/dashboard', authenticateToken, async (req: AuthRequest, res: R
           name: dbDoc.name,
           email: dbDoc.email,
           username: dbDoc.username,
-          passwordHash: dbDoc.passwordHash,
+          passwordHash: dbDoc.passwordHash || dbDoc.password,
           role: dbDoc.role as 'user' | 'admin',
           country: dbDoc.country || 'United States',
           phone: dbDoc.phone || '',
@@ -870,7 +934,11 @@ router.get('/user/dashboard', authenticateToken, async (req: AuthRequest, res: R
   // Sync user active investments from MongoDB if connected
   if (mongoose.connection.readyState === 1) {
     try {
-      const dbInvs: any[] = await (investmentGoldBodPro as any).find({ userId: user.id });
+      const userQuery = mongoose.Types.ObjectId.isValid(user.id)
+        ? { $or: [{ userId: user.id }, { userId: new mongoose.Types.ObjectId(user.id) }] }
+        : { userId: user.id };
+
+      const dbInvs: any[] = await (investmentGoldBodPro as any).find(userQuery);
       for (const dInv of dbInvs) {
         const invId = dInv._id.toString();
         const existingInv = MEMORY_DB.activeInvestments.find(i => i.id === invId);
@@ -897,8 +965,14 @@ router.get('/user/dashboard', authenticateToken, async (req: AuthRequest, res: R
             status: dInv.status || 'active'
           });
         } else {
-          if (!existingInv.endDate) existingInv.endDate = endIso;
-          if (!existingInv.startDate) existingInv.startDate = startIso;
+          // Synchronize exact database dates, status and amounts
+          existingInv.startDate = startIso;
+          existingInv.endDate = endIso;
+          existingInv.status = dInv.status || existingInv.status;
+          existingInv.amount = Number(dInv.amount);
+          existingInv.profitPercent = profitRate;
+          existingInv.durationDays = durDays;
+          existingInv.totalReturn = totalRet;
         }
       }
     } catch (e) {}

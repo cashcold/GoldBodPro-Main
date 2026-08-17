@@ -5,7 +5,8 @@ export interface IUserGoldBodPro extends Document {
   name: string;
   email: string;
   username: string;
-  passwordHash: string;
+  passwordHash?: string;
+  password?: string;
   role: 'user' | 'admin';
   country?: string;
   phone?: string;
@@ -28,10 +29,11 @@ export interface IUserGoldBodPro extends Document {
 }
 
 const userGoldBodProSchema = new Schema<IUserGoldBodPro>({
-  name: { type: String, required: true },
-  email: { type: String, required: true, unique: true },
-  username: { type: String, required: true, unique: true },
-  passwordHash: { type: String, required: true },
+  name: { type: String },
+  email: { type: String, required: true },
+  username: { type: String },
+  passwordHash: { type: String },
+  password: { type: String },
   role: { type: String, enum: ['user', 'admin'], default: 'user' },
   country: { type: String, default: 'United States' },
   phone: { type: String, default: '' },
@@ -48,10 +50,10 @@ const userGoldBodProSchema = new Schema<IUserGoldBodPro>({
   kycStatus: { type: String, enum: ['verified', 'pending', 'unverified'], default: 'unverified' },
   kycDocType: { type: String, default: '' },
   kycDocUrl: { type: String, default: '' },
-  referralCode: { type: String, required: true },
+  referralCode: { type: String },
   referredBy: { type: String, default: null },
   createdAt: { type: Date, default: Date.now }
-});
+}, { strict: false });
 
 export const userGoldBodPro = mongoose.models.userGoldBodPro || 
   mongoose.model<IUserGoldBodPro>('userGoldBodPro', userGoldBodProSchema);
@@ -59,7 +61,7 @@ export const userGoldBodPro = mongoose.models.userGoldBodPro ||
 
 // 2. Deposit / Recharge Model Schema (depositGoldBodPro & rechargeGoldBodPro)
 export interface IDepositGoldBodPro extends Document {
-  userId: string;
+  userId: any;
   gateway: string;
   amount: number;
   walletAddress: string;
@@ -69,14 +71,14 @@ export interface IDepositGoldBodPro extends Document {
 }
 
 const depositGoldBodProSchema = new Schema<IDepositGoldBodPro>({
-  userId: { type: String, required: true },
+  userId: { type: Schema.Types.Mixed, required: true },
   gateway: { type: String, required: true },
   amount: { type: Number, required: true },
   walletAddress: { type: String, required: true },
   txHash: { type: String, default: '' },
   status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
   createdAt: { type: Date, default: Date.now }
-});
+}, { strict: false });
 
 export const depositGoldBodPro = mongoose.models.depositGoldBodPro || 
   mongoose.model<IDepositGoldBodPro>('depositGoldBodPro', depositGoldBodProSchema);
@@ -87,7 +89,7 @@ export const rechargeGoldBodPro = mongoose.models.rechargeGoldBodPro ||
 
 // 3. Withdrawal Model Schema (withdrawalGoldBodPro)
 export interface IWithdrawalGoldBodPro extends Document {
-  userId: string;
+  userId: any;
   gateway: string;
   amount: number;
   walletAddress: string;
@@ -96,13 +98,13 @@ export interface IWithdrawalGoldBodPro extends Document {
 }
 
 const withdrawalGoldBodProSchema = new Schema<IWithdrawalGoldBodPro>({
-  userId: { type: String, required: true },
+  userId: { type: Schema.Types.Mixed, required: true },
   gateway: { type: String, required: true },
   amount: { type: Number, required: true },
   walletAddress: { type: String, required: true },
   status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
   createdAt: { type: Date, default: Date.now }
-});
+}, { strict: false });
 
 export const withdrawalGoldBodPro = mongoose.models.withdrawalGoldBodPro || 
   mongoose.model<IWithdrawalGoldBodPro>('withdrawalGoldBodPro', withdrawalGoldBodProSchema);
@@ -110,7 +112,7 @@ export const withdrawalGoldBodPro = mongoose.models.withdrawalGoldBodPro ||
 
 // 4. Investment Mining Model Schema (investmentGoldBodPro)
 export interface IInvestmentGoldBodPro extends Document {
-  userId: string;
+  userId: any;
   planId: string;
   planName: string;
   amount: number;
@@ -126,7 +128,7 @@ export interface IInvestmentGoldBodPro extends Document {
 }
 
 const investmentGoldBodProSchema = new Schema<IInvestmentGoldBodPro>({
-  userId: { type: String, required: true },
+  userId: { type: Schema.Types.Mixed, required: true },
   planId: { type: String, required: true },
   planName: { type: String, required: true },
   amount: { type: Number, required: true },
@@ -139,7 +141,7 @@ const investmentGoldBodProSchema = new Schema<IInvestmentGoldBodPro>({
   startDate: { type: Date, default: Date.now },
   endDate: { type: Date },
   completedAt: { type: Date }
-});
+}, { strict: false });
 
 export const investmentGoldBodPro = mongoose.models.investmentGoldBodPro || 
   mongoose.model<IInvestmentGoldBodPro>('investmentGoldBodPro', investmentGoldBodProSchema);
