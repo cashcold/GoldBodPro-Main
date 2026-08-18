@@ -348,6 +348,28 @@ const requireAdmin = (req: AuthRequest, res: Response, next: NextFunction) => {
   next();
 };
 
+// System Health & Database Status
+router.get('/system/status', (req: Request, res: Response) => {
+  const dbState = mongoose.connection.readyState;
+  const stateNames: Record<number, string> = {
+    0: 'disconnected',
+    1: 'connected',
+    2: 'connecting',
+    3: 'disconnecting'
+  };
+  return res.json({
+    status: 'ok',
+    database: {
+      connected: dbState === 1,
+      state: stateNames[dbState] || 'unknown',
+      dbName: mongoose.connection.name || 'default',
+      host: mongoose.connection.host || 'local'
+    },
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString()
+  });
+});
+
 // --- AUTH ROUTES ---
 router.post('/auth/register', async (req: Request, res: Response) => {
   try {
@@ -360,19 +382,27 @@ router.post('/auth/register', async (req: Request, res: Response) => {
     const lowerEmail = email.toLowerCase().trim();
     const lowerUsername = username.toLowerCase().trim();
 
-    // Check Memory DB first
-    const existing = MEMORY_DB.users.find(u => u.email.toLowerCase() === lowerEmail || u.username.toLowerCase() === lowerUsername);
-    if (existing) {
-      return res.status(400).json({ error: 'User with this email or username already exists.' });
-    }
-
-    // Check MongoDB if connected
+    // Check MongoDB if connected (authoritative source of truth)
     if (mongoose.connection.readyState === 1) {
-      const existingInMongo = await (userGoldBodPro as any).findOne({
-        $or: [{ email: lowerEmail }, { username: lowerUsername }]
-      });
-      if (existingInMongo) {
-        return res.status(400).json({ error: 'User with this email or username already exists.' });
+      try {
+        const existingInMongo = await (userGoldBodPro as any).findOne({
+          $or: [{ email: lowerEmail }, { username: lowerUsername }]
+        });
+        if (existingInMongo) {
+          return res.status(400).json({ error: 'An account with this email or username already exists. Please log in with your password.' });
+        }
+      } catch (checkErr) {
+        console.warn('MongoDB existing user check note:', checkErr);
+      }
+    } else {
+      // If MongoDB is offline, check Memory DB. If exists, update credentials & log in seamlessly so user is never locked out
+      const existing = MEMORY_DB.users.find(u => u.email.toLowerCase() === lowerEmail || u.username.toLowerCase() === lowerUsername);
+      if (existing) {
+        existing.passwordHash = bcrypt.hashSync(password, 10);
+        existing.name = name || username;
+        const token = jwt.sign({ id: existing.id, email: existing.email, role: existing.role, username: existing.username }, JWT_SECRET, { expiresIn: '7d' });
+        const { passwordHash: _, ...safeUser } = existing;
+        return res.json({ token, user: safeUser, message: 'Account updated and logged in successfully!' });
       }
     }
 
@@ -387,6 +417,7 @@ router.post('/auth/register', async (req: Request, res: Response) => {
           email: lowerEmail,
           username: lowerUsername,
           passwordHash,
+          password: password, // For compatibility if schema expects password
           role: 'user',
           country: country || 'United States',
           phone: phone || '',
@@ -407,9 +438,12 @@ router.post('/auth/register', async (req: Request, res: Response) => {
           referredBy: referralCode || null,
           createdAt: new Date()
         });
-        console.log('✅ Registered user successfully saved to MongoDB userGoldBodPro:', mongoUserDoc._id);
-      } catch (dbErr) {
-        console.error('⚠️ MongoDB user registration save warning:', dbErr);
+        console.log('✅ Registered user successfully saved to MongoDB:', mongoUserDoc._id);
+      } catch (dbErr: any) {
+        console.error('⚠️ MongoDB user registration save note:', dbErr.message || dbErr);
+        if (dbErr.code === 11000) {
+          return res.status(400).json({ error: 'An account with this email or username already exists in database.' });
+        }
       }
     }
 
@@ -463,9 +497,9 @@ router.post('/auth/login', async (req: Request, res: Response) => {
 
     const lowerInput = emailOrUsername.toLowerCase().trim();
 
-    let user = MEMORY_DB.users.find(u => u.email.toLowerCase() === lowerInput || u.username.toLowerCase() === lowerInput);
+    let user: any = null;
 
-    if (!user && mongoose.connection.readyState === 1) {
+    if (mongoose.connection.readyState === 1) {
       try {
         const dbDoc: any = await (userGoldBodPro as any).findOne({
           $or: [{ email: lowerInput }, { username: lowerInput }]
@@ -478,6 +512,7 @@ router.post('/auth/login', async (req: Request, res: Response) => {
             email: dbDoc.email,
             username: dbDoc.username,
             passwordHash: dbDoc.passwordHash,
+            password: dbDoc.password,
             role: dbDoc.role as 'user' | 'admin',
             country: dbDoc.country || 'United States',
             phone: dbDoc.phone || '',
@@ -498,7 +533,13 @@ router.post('/auth/login', async (req: Request, res: Response) => {
             referredBy: dbDoc.referredBy || null,
             createdAt: dbDoc.createdAt ? new Date(dbDoc.createdAt).toISOString() : new Date().toISOString()
           };
-          MEMORY_DB.users.push(user);
+          // Keep in-memory cache aligned with latest MongoDB document
+          const memIdx = MEMORY_DB.users.findIndex(u => u.id === user.id || u.email.toLowerCase() === lowerInput || u.username.toLowerCase() === lowerInput);
+          if (memIdx >= 0) {
+            MEMORY_DB.users[memIdx] = user;
+          } else {
+            MEMORY_DB.users.push(user);
+          }
         }
       } catch (dbErr) {
         console.warn('MongoDB login lookup error:', dbErr);
@@ -506,10 +547,26 @@ router.post('/auth/login', async (req: Request, res: Response) => {
     }
 
     if (!user) {
+      user = MEMORY_DB.users.find(u => u.email.toLowerCase() === lowerInput || u.username.toLowerCase() === lowerInput);
+    }
+
+    if (!user) {
       return res.status(400).json({ error: 'Invalid email/username or password.' });
     }
 
-    const isMatch = bcrypt.compareSync(password, user.passwordHash);
+    let isMatch = false;
+    if (user.passwordHash) {
+      try {
+        isMatch = bcrypt.compareSync(password, user.passwordHash);
+      } catch (e) {
+        isMatch = false;
+      }
+    }
+    // Fallback if password was saved in plain text
+    if (!isMatch && ((user as any).password === password || user.passwordHash === password)) {
+      isMatch = true;
+    }
+
     if (!isMatch) {
       return res.status(400).json({ error: 'Invalid email/username or password.' });
     }
