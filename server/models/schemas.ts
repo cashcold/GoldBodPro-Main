@@ -56,7 +56,7 @@ const userGoldBodProSchema = new Schema<IUserGoldBodPro>({
 }, { strict: false });
 
 export const userGoldBodPro = mongoose.models.userGoldBodPro || 
-  mongoose.model<IUserGoldBodPro>('userGoldBodPro', userGoldBodProSchema);
+  mongoose.model<IUserGoldBodPro>('userGoldBodPro', userGoldBodProSchema, 'users');
 
 
 // 2. Deposit / Recharge Model Schema (depositGoldBodPro & rechargeGoldBodPro)
@@ -81,10 +81,10 @@ const depositGoldBodProSchema = new Schema<IDepositGoldBodPro>({
 }, { strict: false });
 
 export const depositGoldBodPro = mongoose.models.depositGoldBodPro || 
-  mongoose.model<IDepositGoldBodPro>('depositGoldBodPro', depositGoldBodProSchema);
+  mongoose.model<IDepositGoldBodPro>('depositGoldBodPro', depositGoldBodProSchema, 'deposits');
 
 export const rechargeGoldBodPro = mongoose.models.rechargeGoldBodPro || 
-  mongoose.model<IDepositGoldBodPro>('rechargeGoldBodPro', depositGoldBodProSchema);
+  mongoose.model<IDepositGoldBodPro>('rechargeGoldBodPro', depositGoldBodProSchema, 'deposits');
 
 
 // 3. Withdrawal Model Schema (withdrawalGoldBodPro)
@@ -107,7 +107,7 @@ const withdrawalGoldBodProSchema = new Schema<IWithdrawalGoldBodPro>({
 }, { strict: false });
 
 export const withdrawalGoldBodPro = mongoose.models.withdrawalGoldBodPro || 
-  mongoose.model<IWithdrawalGoldBodPro>('withdrawalGoldBodPro', withdrawalGoldBodProSchema);
+  mongoose.model<IWithdrawalGoldBodPro>('withdrawalGoldBodPro', withdrawalGoldBodProSchema, 'withdrawals');
 
 
 // 4. Investment Mining Model Schema (investmentGoldBodPro)
@@ -144,7 +144,7 @@ const investmentGoldBodProSchema = new Schema<IInvestmentGoldBodPro>({
 }, { strict: false });
 
 export const investmentGoldBodPro = mongoose.models.investmentGoldBodPro || 
-  mongoose.model<IInvestmentGoldBodPro>('investmentGoldBodPro', investmentGoldBodProSchema);
+  mongoose.model<IInvestmentGoldBodPro>('investmentGoldBodPro', investmentGoldBodProSchema, 'investments');
 
 
 // 5. Transaction Log Model Schema (transactionGoldBodPro)
@@ -167,7 +167,7 @@ const transactionGoldBodProSchema = new Schema<ITransactionGoldBodPro>({
 });
 
 export const transactionGoldBodPro = mongoose.models.transactionGoldBodPro || 
-  mongoose.model<ITransactionGoldBodPro>('transactionGoldBodPro', transactionGoldBodProSchema);
+  mongoose.model<ITransactionGoldBodPro>('transactionGoldBodPro', transactionGoldBodProSchema, 'transactions');
 
 
 // 6. Plan Configuration Model Schema (planGoldBodPro)
@@ -192,7 +192,7 @@ const planGoldBodProSchema = new Schema<IPlanGoldBodPro>({
 });
 
 export const planGoldBodPro = mongoose.models.planGoldBodPro || 
-  mongoose.model<IPlanGoldBodPro>('planGoldBodPro', planGoldBodProSchema);
+  mongoose.model<IPlanGoldBodPro>('planGoldBodPro', planGoldBodProSchema, 'plans');
 
 
 // 7. System Treasury & Live Financial Reserve Model Schema (systemReserveGoldBodPro)
@@ -213,4 +213,4 @@ const systemReserveGoldBodProSchema = new Schema<ISystemReserveGoldBodPro>({
 });
 
 export const systemReserveGoldBodPro = mongoose.models.systemReserveGoldBodPro || 
-  mongoose.model<ISystemReserveGoldBodPro>('systemReserveGoldBodPro', systemReserveGoldBodProSchema);
+  mongoose.model<ISystemReserveGoldBodPro>('systemReserveGoldBodPro', systemReserveGoldBodProSchema, 'system_reserves');

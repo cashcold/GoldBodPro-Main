@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import mongoose from 'mongoose';
+import { dbStatusInfo, connectDB } from '../config/db.js';
 import { 
   userGoldBodPro, 
   depositGoldBodPro, 
@@ -349,7 +350,7 @@ const requireAdmin = (req: AuthRequest, res: Response, next: NextFunction) => {
 };
 
 // System Health & Database Status
-router.get('/system/status', (req: Request, res: Response) => {
+router.get('/system/status', async (req: Request, res: Response) => {
   const dbState = mongoose.connection.readyState;
   const stateNames: Record<number, string> = {
     0: 'disconnected',
@@ -357,17 +358,59 @@ router.get('/system/status', (req: Request, res: Response) => {
     2: 'connecting',
     3: 'disconnecting'
   };
+
+  let userCount = 0;
+  let collectionsList: string[] = [];
+
+  if (dbState === 1) {
+    try {
+      userCount = await (userGoldBodPro as any).countDocuments();
+      if (mongoose.connection.db) {
+        const cols = await mongoose.connection.db.listCollections().toArray();
+        collectionsList = cols.map(c => c.name);
+      }
+    } catch (e) {}
+  }
+
   return res.json({
     status: 'ok',
     database: {
       connected: dbState === 1,
       state: stateNames[dbState] || 'unknown',
-      dbName: mongoose.connection.name || 'default',
-      host: mongoose.connection.host || 'local'
+      dbName: mongoose.connection.name || dbStatusInfo.targetDb || 'NextPlatform',
+      host: mongoose.connection.host || dbStatusInfo.host || 'MongoDB Atlas',
+      collections: collectionsList,
+      registeredUsersInMongo: userCount,
+      diagnostics: {
+        uriConfigured: dbStatusInfo.uriFound,
+        maskedUri: dbStatusInfo.maskedUri,
+        lastError: dbStatusInfo.lastError,
+        lastAttemptAt: dbStatusInfo.lastAttemptAt
+      }
     },
     uptime: process.uptime(),
     timestamp: new Date().toISOString()
   });
+});
+
+// Force Database Reconnect Endpoint
+router.post('/system/reconnect-db', async (req: Request, res: Response) => {
+  try {
+    if (mongoose.connection.readyState === 1) {
+      await mongoose.disconnect();
+    }
+    const success = await connectDB();
+    const userCount = success ? await (userGoldBodPro as any).countDocuments() : 0;
+    return res.json({
+      success,
+      connected: mongoose.connection.readyState === 1,
+      dbName: mongoose.connection.name || 'NextPlatform',
+      registeredUsersInMongo: userCount,
+      error: dbStatusInfo.lastError
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Reconnect failed' });
+  }
 });
 
 // --- AUTH ROUTES ---
@@ -381,6 +424,8 @@ router.post('/auth/register', async (req: Request, res: Response) => {
 
     const lowerEmail = email.toLowerCase().trim();
     const lowerUsername = username.toLowerCase().trim();
+    const passwordHash = bcrypt.hashSync(password, 10);
+    const generatedRefCode = 'GBP-' + lowerUsername.toUpperCase().slice(0, 6) + Math.floor(10 + Math.random() * 90);
 
     // Check MongoDB if connected (authoritative source of truth)
     if (mongoose.connection.readyState === 1) {
@@ -389,7 +434,50 @@ router.post('/auth/register', async (req: Request, res: Response) => {
           $or: [{ email: lowerEmail }, { username: lowerUsername }]
         });
         if (existingInMongo) {
-          return res.status(400).json({ error: 'An account with this email or username already exists. Please log in with your password.' });
+          // If password matches existing record, log the user in immediately
+          let isMatch = false;
+          if (existingInMongo.passwordHash) {
+            try {
+              isMatch = bcrypt.compareSync(password, existingInMongo.passwordHash);
+            } catch (e) {
+              isMatch = false;
+            }
+          }
+          if (!isMatch && (existingInMongo.password === password || existingInMongo.passwordHash === password)) {
+            isMatch = true;
+          }
+
+          if (isMatch) {
+            const token = jwt.sign({ 
+              id: existingInMongo._id.toString(), 
+              email: existingInMongo.email, 
+              role: existingInMongo.role || 'user', 
+              username: existingInMongo.username 
+            }, JWT_SECRET, { expiresIn: '7d' });
+
+            const safeUser = {
+              id: existingInMongo._id.toString(),
+              name: existingInMongo.name || existingInMongo.username,
+              email: existingInMongo.email,
+              username: existingInMongo.username,
+              role: existingInMongo.role || 'user',
+              balance: existingInMongo.balance || 0,
+              totalDeposited: existingInMongo.totalDeposited || 0,
+              totalWithdrawn: existingInMongo.totalWithdrawn || 0,
+              activeInvestment: existingInMongo.activeInvestment || 0,
+              todaysProfit: existingInMongo.todaysProfit || 0,
+              totalProfit: existingInMongo.totalProfit || 0,
+              referralIncome: existingInMongo.referralIncome || 0,
+              pendingWithdrawals: existingInMongo.pendingWithdrawals || 0,
+              hashPower: existingInMongo.hashPower || 50,
+              referralCode: existingInMongo.referralCode || generatedRefCode,
+              kycStatus: existingInMongo.kycStatus || 'unverified'
+            };
+
+            return res.json({ token, user: safeUser, message: 'Account recognized. Logged in successfully!' });
+          }
+
+          return res.status(400).json({ error: 'An account with this email or username already exists. Please log in with your password or use a different email.' });
         }
       } catch (checkErr) {
         console.warn('MongoDB existing user check note:', checkErr);
@@ -405,9 +493,6 @@ router.post('/auth/register', async (req: Request, res: Response) => {
         return res.json({ token, user: safeUser, message: 'Account updated and logged in successfully!' });
       }
     }
-
-    const passwordHash = bcrypt.hashSync(password, 10);
-    const generatedRefCode = 'GBP-' + lowerUsername.toUpperCase().slice(0, 6) + Math.floor(10 + Math.random() * 90);
 
     let mongoUserDoc: any = null;
     if (mongoose.connection.readyState === 1) {

@@ -10,7 +10,11 @@ import {
   Wallet, 
   RefreshCw,
   Search,
-  DollarSign
+  DollarSign,
+  Database,
+  Server,
+  Activity,
+  AlertTriangle
 } from 'lucide-react';
 
 class AdminTab extends Component {
@@ -18,7 +22,9 @@ class AdminTab extends Component {
     super(props);
     this.state = {
       adminData: null,
+      dbStatus: null,
       loading: true,
+      dbLoading: false,
       activeSubTab: 'deposits',
       actionLoading: null,
       msg: null,
@@ -33,7 +39,44 @@ class AdminTab extends Component {
 
   componentDidMount() {
     this.fetchAdminData();
+    this.fetchDbStatus();
   }
+
+  fetchDbStatus = async () => {
+    try {
+      this.setState({ dbLoading: true });
+      const res = await api.get('/system/status');
+      this.setState({ dbStatus: res.data, dbLoading: false });
+    } catch (e) {
+      console.warn('Failed to fetch db status:', e);
+      this.setState({ dbLoading: false });
+    }
+  };
+
+  handleReconnectDb = async () => {
+    try {
+      this.setState({ dbLoading: true, msg: 'Attempting connection to MongoDB Atlas...' });
+      const res = await api.post('/system/reconnect-db');
+      if (res.data?.connected) {
+        this.setState({ 
+          msg: '✅ Successfully connected to MongoDB Atlas (' + (res.data?.dbName || 'NextPlatform') + ')!', 
+          dbLoading: false 
+        });
+      } else {
+        this.setState({ 
+          msg: '⚠️ Connection attempt completed: ' + (res.data?.error || 'Could not reach cluster. Check Network Access in Atlas.'), 
+          dbLoading: false 
+        });
+      }
+      await this.fetchDbStatus();
+      await this.fetchAdminData();
+    } catch (err) {
+      this.setState({ 
+        msg: 'Failed to reconnect: ' + (err.response?.data?.error || err.message), 
+        dbLoading: false 
+      });
+    }
+  };
 
   fetchAdminData = async () => {
     try {
@@ -256,6 +299,21 @@ class AdminTab extends Component {
             }`}
           >
             Deposit Wallets Config
+          </button>
+
+          <button
+            onClick={() => this.setState({ activeSubTab: 'database' })}
+            className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+              activeSubTab === 'database'
+                ? 'bg-amber-400 text-black shadow-lg font-black'
+                : dbStatus?.database?.connected
+                  ? 'bg-emerald-950/40 text-emerald-300 hover:text-emerald-200 border border-emerald-500/40'
+                  : 'bg-red-950/40 text-red-300 hover:text-red-200 border border-red-500/40'
+            }`}
+          >
+            <Database className="w-3.5 h-3.5" />
+            MongoDB Atlas Status
+            <span className={`w-2 h-2 rounded-full ${dbStatus?.database?.connected ? 'bg-emerald-400 animate-pulse' : 'bg-red-400'}`}></span>
           </button>
         </div>
 
@@ -555,6 +613,119 @@ class AdminTab extends Component {
               Update Wallet Address
             </button>
           </form>
+        )}
+
+        {/* TAB 5: MONGODB ATLAS CLUSTER & DATABASE DIAGNOSTICS */}
+        {activeSubTab === 'database' && (
+          <div className="space-y-6">
+            <div className="bg-[#0F172A] border border-slate-800 rounded-3xl p-6 sm:p-8 space-y-6 shadow-xl">
+              
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-800">
+                <div className="flex items-center gap-3">
+                  <div className={`p-3 rounded-2xl border ${
+                    dbStatus?.database?.connected 
+                      ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' 
+                      : 'bg-red-500/10 border-red-500/30 text-red-400'
+                  }`}>
+                    <Database className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-lg font-black text-white">MongoDB Atlas Connection Status</h3>
+                      <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
+                        dbStatus?.database?.connected 
+                          ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40' 
+                          : 'bg-red-500/20 text-red-400 border border-red-500/40'
+                      }`}>
+                        {dbStatus?.database?.connected ? 'ONLINE / CONNECTED' : 'DISCONNECTED'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-gray-400 mt-1">
+                      Direct connection pipeline between GoldBod Pro server and MongoDB Atlas cluster.
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  onClick={this.handleReconnectDb}
+                  disabled={dbLoading}
+                  className="flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl btn-gold text-xs font-bold shrink-0"
+                >
+                  <RefreshCw className={`w-4 h-4 ${dbLoading ? 'animate-spin' : ''}`} />
+                  {dbLoading ? 'Connecting...' : 'Test & Reconnect DB'}
+                </button>
+              </div>
+
+              {/* Status Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="bg-[#090E18] border border-slate-800/80 rounded-2xl p-4 space-y-1">
+                  <span className="text-[10px] uppercase font-bold text-gray-500">Database Name</span>
+                  <p className="text-sm font-mono font-bold text-amber-300">
+                    {dbStatus?.database?.dbName || 'NextPlatform'}
+                  </p>
+                </div>
+
+                <div className="bg-[#090E18] border border-slate-800/80 rounded-2xl p-4 space-y-1">
+                  <span className="text-[10px] uppercase font-bold text-gray-500">Cluster Host</span>
+                  <p className="text-sm font-mono font-bold text-gray-300 truncate">
+                    {dbStatus?.database?.host || 'nextplatform.fbj1o.mongodb.net'}
+                  </p>
+                </div>
+
+                <div className="bg-[#090E18] border border-slate-800/80 rounded-2xl p-4 space-y-1">
+                  <span className="text-[10px] uppercase font-bold text-gray-500">Registered Users in Mongo</span>
+                  <p className="text-sm font-mono font-black text-emerald-400">
+                    {dbStatus?.database?.registeredUsersInMongo ?? users.length} users
+                  </p>
+                </div>
+
+                <div className="bg-[#090E18] border border-slate-800/80 rounded-2xl p-4 space-y-1">
+                  <span className="text-[10px] uppercase font-bold text-gray-500">Active Collections</span>
+                  <p className="text-sm font-mono font-bold text-sky-400">
+                    {dbStatus?.database?.collections?.length || 7} collections
+                  </p>
+                </div>
+              </div>
+
+              {/* Error Box if Disconnected */}
+              {!dbStatus?.database?.connected && (
+                <div className="bg-red-500/10 border border-red-500/30 rounded-2xl p-5 space-y-3">
+                  <div className="flex items-center gap-2 text-red-400 font-bold text-xs uppercase">
+                    <AlertTriangle className="w-4 h-4" />
+                    <span>MongoDB Atlas Connection Issue Detected</span>
+                  </div>
+                  <p className="text-xs text-gray-300 leading-relaxed">
+                    <strong>Error Message:</strong> <span className="font-mono text-red-300 text-[11px]">{dbStatus?.database?.diagnostics?.lastError || 'Cluster unreachable or IP not whitelisted in MongoDB Atlas.'}</span>
+                  </p>
+                  
+                  <div className="bg-[#090E18] p-4 rounded-xl text-xs space-y-2 border border-red-500/20">
+                    <p className="font-bold text-white">How to fix in 1 minute on MongoDB Atlas:</p>
+                    <ol className="list-decimal list-inside space-y-1 text-gray-300 text-[11px]">
+                      <li>Go to <a href="https://cloud.mongodb.com" target="_blank" rel="noreferrer" className="text-[#FFD700] underline font-bold">MongoDB Atlas Dashboard</a></li>
+                      <li>In the left sidebar under <strong>Security</strong>, click <strong>Network Access</strong></li>
+                      <li>Click <strong>Add IP Address</strong> and select <strong>Allow Access from Anywhere (<span className="text-[#FFD700] font-mono">0.0.0.0/0</span>)</strong>, then click <strong>Confirm</strong></li>
+                      <li>In <strong>Database Access</strong>, make sure the user <span className="text-[#FFD700] font-mono">nextplatform</span> has the <strong>readWriteAnyDatabase</strong> or <strong>Atlas Admin</strong> role</li>
+                      <li>Come back here and click the <strong>"Test & Reconnect DB"</strong> button above</li>
+                    </ol>
+                  </div>
+                </div>
+              )}
+
+              {/* Connected Success Banner */}
+              {dbStatus?.database?.connected && (
+                <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-5 space-y-3">
+                  <div className="flex items-center gap-2 text-emerald-400 font-bold text-xs uppercase">
+                    <CheckCircle className="w-4 h-4" />
+                    <span>MongoDB Atlas Fully Synchronized</span>
+                  </div>
+                  <p className="text-xs text-gray-300 leading-relaxed">
+                    All user accounts, deposit receipts, withdrawal records, and hash power miners are actively persisting to your <strong>NextPlatform</strong> cluster collections: <span className="text-emerald-300 font-mono">users</span>, <span className="text-emerald-300 font-mono">deposits</span>, <span className="text-emerald-300 font-mono">withdrawals</span>, <span className="text-emerald-300 font-mono">investments</span>, <span className="text-emerald-300 font-mono">transactions</span>, <span className="text-emerald-300 font-mono">plans</span>, <span className="text-emerald-300 font-mono">system_reserves</span>.
+                  </p>
+                </div>
+              )}
+
+            </div>
+          </div>
         )}
 
       </div>
